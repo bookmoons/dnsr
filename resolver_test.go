@@ -196,6 +196,20 @@ func TestTTL(t *testing.T) {
 	st.Expect(t, !rr.Expiry.IsZero(), true)
 }
 
+func TestAlternateFirst(t *testing.T) {
+	r := New(0)
+	rrs, err := r.ResolveAlternateErr("google.com", []string{"AAAA", "A"})
+	st.Expect(t, err, nil)
+	st.Expect(t, count(rrs, func(rr RR) bool { return rr.Type == "AAAA" }) >= 1, true)
+}
+
+func TestAlternateSecond(t *testing.T) {
+	r := New(0)
+	rrs, err := r.ResolveAlternateErr("httpbin.org", []string{"AAAA", "A"})
+	st.Expect(t, err, nil)
+	st.Expect(t, count(rrs, func(rr RR) bool { return rr.Type == "A" }) >= 1, true)
+}
+
 var testResolver *Resolver
 
 func BenchmarkResolve(b *testing.B) {

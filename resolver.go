@@ -101,6 +101,43 @@ func (r *Resolver) ResolveCtx(ctx context.Context, qname, qtype string) (RRs, er
 	return r.resolve(ctx, toLowerFQDN(qname), qtype, 0)
 }
 
+// ResolveAlternate calls ResolveAlternateErr to find DNS records with any of
+// the specified types for the domain qname.
+// For nonexistent domains (NXDOMAIN), it will return an empty, non-nil slice.
+func (r *Resolver) ResolveAlternate(qname string, qtypes []string) RRs {
+	rrs, err := r.ResolveAlternateErr(qname, qtypes)
+	if err == NXDOMAIN {
+		return emptyRRs
+	}
+	if err != nil {
+		return nil
+	}
+	return rrs
+}
+
+// ResolveAlternateErr returns the first found DNS records with any of the
+// specified types for the domain qname. Cache is checked for all types before
+// resorting to network queries.
+// For nonexistent domains, it will return an NXDOMAIN error.
+// Provide types in preference order.
+func (r *Resolver) ResolveAlternateErr(qname string, qtypes []string) (RRs, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
+	defer cancel()
+	return r.resolveAlternate(ctx, toLowerFQDN(qname), qtypes)
+}
+
+// ResolveAlternateCtx returns the first found DNS records with any of the
+// specified types for the domain qname using the supplied context. Requests
+// may time out earlier if timeout is shorter than a deadline set in ctx. Cache
+// is checked for all types before resorting to network queries.
+// For nonexistent domains, it will return an NXDOMAIN error.
+// Provide types in preference order.
+func (r *Resolver) ResolveAlternateCtx(ctx context.Context, qname string, qtypes []string) (RRs, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	return r.resolveAlternate(ctx, toLowerFQDN(qname), qtypes)
+}
+
 func (r *Resolver) resolve(ctx context.Context, qname, qtype string, depth int) (RRs, error) {
 	if depth++; depth > MaxRecursion {
 		logMaxRecursion(qname, qtype, depth)
@@ -118,6 +155,34 @@ func (r *Resolver) resolve(ctx context.Context, qname, qtype string, depth int) 
 	rrs, err = r.iterateParents(ctx, qname, qtype, depth)
 	logResolveEnd(qname, qtype, rrs, depth, start, err)
 	return rrs, err
+}
+
+func (r *Resolver) resolveAlternate(ctx context.Context, qname string, qtypes []string) (RRs, error) {
+	for _, qtype := range qtypes {
+		rrs, err := r.cacheGet(ctx, qname, qtype)
+		if err != nil {
+			return nil, err
+		}
+		if len(rrs) > 0 {
+			return rrs, nil
+		}
+	}
+	for _, qtype := range qtypes {
+		result, err := r.resolve(ctx, qname, qtype, 0)
+		if err != nil {
+			return nil, err
+		}
+		rrs := make(RRs, 0, len(result))
+		for _, rr := range result {
+			if qtype == "" || rr.Type == qtype {
+				rrs = append(rrs, rr)
+			}
+		}
+		if len(rrs) > 0 {
+			return rrs, nil
+		}
+	}
+	return emptyRRs, nil
 }
 
 func (r *Resolver) iterateParents(ctx context.Context, qname, qtype string, depth int) (RRs, error) {
